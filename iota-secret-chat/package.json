@@ -11,6 +11,7 @@
   "dependencies": {
     "@iota/dapp-kit": "^0.8.0",
     "@iota/iota-sdk": "^1.9.1",
+    "crypto-js": "^4.2.0",
     "next": "16.0.10",
     "react": "19.2.1",
     "react-dom": "19.2.1"
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@tanstack/react-query": "^5.90.12",
+    "@types/crypto-js": "^4.2.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
