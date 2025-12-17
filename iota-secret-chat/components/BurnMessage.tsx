@@ -4,7 +4,7 @@ import { useSignAndExecuteTransaction, useIotaClient } from "@iota/dapp-kit";
 import { Transaction } from "@iota/iota-sdk/transactions";
 import { PACKAGE_ID, MODULE_NAME, CLOCK_ID } from "@/utils/config";
 import { useState } from "react";
-import { decryptMessage } from "@/utils/encryption"; // 記得引入剛剛寫的工具
+import { decryptMessage } from "@/utils/encryption";
 
 interface BurnMessageProps {
   objectId: string;
@@ -20,11 +20,9 @@ export function BurnMessage({ objectId, sender, onBurnSuccess, onReveal }: BurnM
   const [status, setStatus] = useState<"idle" | "burning">("idle");
 
   const handleBurn = () => {
-    // 1. 在銷毀前，先要求使用者輸入解密密碼
-    const password = prompt("🔐 這是一則加密訊息，請輸入密碼以解密：");
-    
-    if (!password) {
-      alert("❌ 必須輸入密碼才能進行銷毀與讀取。");
+    // 1. 移除這裡的 prompt，直接開始執行銷毀交易
+    // 我們改在交易成功後再問密碼
+    if (!confirm("🔥 確定要讀取並銷毀這則訊息嗎？\n(銷毀後將要求輸入解密密碼)")) {
       return;
     }
 
@@ -49,6 +47,7 @@ export function BurnMessage({ objectId, sender, onBurnSuccess, onReveal }: BurnM
           let events = (result as any).events;
           const digest = result.digest;
 
+          // 雙重確認機制：若 Wallet 沒回傳 Events，主動去鏈上查
           if (!events || events.length === 0) {
             try {
               const txDetails = await client.waitForTransaction({
@@ -67,27 +66,50 @@ export function BurnMessage({ objectId, sender, onBurnSuccess, onReveal }: BurnM
             );
 
             if (targetEvent && targetEvent.parsedJson) {
-              // 這是鏈上的「密文」 (亂碼)
               const cipherText = (targetEvent.parsedJson as any).content;
               
               if (cipherText) {
-                // 2. 嘗試解密
-                const originalContent = decryptMessage(cipherText, password);
+                // --- 2. 新增：三次解密機會邏輯 ---
+                let attempts = 0;
+                let decryptedContent: string | null = null;
 
-                if (originalContent) {
-                  // 解密成功！顯示原文
-                  onReveal(originalContent);
-                  onBurnSuccess(); 
-                } else {
-                  // 解密失敗 (密碼錯誤)
-                  // 注意：此時物件已經在鏈上被銷毀了，這就是「閱後即焚」殘酷的地方
-                  // 如果密碼打錯，這則訊息就永遠找不回來了。
-                  alert(`⚠️ 銷毀成功，但解密失敗！可能是密碼錯誤。\n\n密文: ${cipherText}`);
-                  // 我們還是要把密文顯示出來，至少讓使用者有機會去試著手動解密
-                  onReveal(`(解密失敗，密文如下): ${cipherText}`);
-                  onBurnSuccess();
+                while (attempts < 3) {
+                  // 根據嘗試次數顯示不同提示
+                  const promptMsg = attempts === 0 
+                    ? "🔐 訊息已從鏈上銷毀！\n請輸入密碼進行解密："
+                    : `❌ 密碼錯誤！剩餘 ${3 - attempts} 次機會：`;
+
+                  const inputPwd = prompt(promptMsg);
+
+                  // 如果使用者按取消，視同放棄
+                  if (inputPwd === null) break;
+
+                  const result = decryptMessage(cipherText, inputPwd);
+                  if (result) {
+                    decryptedContent = result;
+                    break; // 解密成功，跳出迴圈
+                  }
+                  
+                  attempts++;
                 }
-              } 
+
+                // --- 3. 判斷最終結果 ---
+                if (decryptedContent) {
+                  // 成功：顯示內容
+                  onReveal(decryptedContent);
+                } else {
+                  // 失敗：不顯示密文，直接報錯並結束
+                  alert("❌ 三次密碼錯誤 (或已取消)。\n\n訊息已在區塊鏈上銷毀，且因無法解密，內容已永久遺失。");
+                  // 這裡我們不再呼叫 onReveal，所以畫面上不會出現紅色框框
+                }
+                
+                // 刷新列表 (移除該項目)
+                onBurnSuccess(); 
+                
+              } else {
+                alert(`⚠️ 內容欄位遺失`);
+                setStatus("idle");
+              }
             } 
           } else {
             alert("⚠️ 交易成功，但無法讀取內容。");
@@ -96,7 +118,7 @@ export function BurnMessage({ objectId, sender, onBurnSuccess, onReveal }: BurnM
         },
         onError: (err) => {
           console.error(err);
-          alert("❌ 銷毀失敗");
+          alert("❌ 銷毀交易失敗");
           setStatus("idle");
         },
       }
