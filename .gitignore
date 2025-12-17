@@ -1,0 +1,28 @@
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Next.js ---
+.next/
+out/
+build/
+dist/
+
+# --- Security (絕對不能上傳!) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+wallet-keys.json
+*.key
+
+# --- IOTA Move ---
+# 忽略 Move 編譯後的檔案，這些不需要上傳，別人可以自己編譯
+contract/build/
+**/build/
+
+# --- System ---
+.DS_Store
+*.log
