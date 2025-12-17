@@ -1,6 +1,6 @@
 "use client";
 
-import { useSignAndExecuteTransaction } from "@iota/dapp-kit";
+import { useSignAndExecuteTransaction, useIotaClient } from "@iota/dapp-kit";
 import { Transaction } from "@iota/iota-sdk/transactions";
 import { PACKAGE_ID, MODULE_NAME, CLOCK_ID } from "@/utils/config";
 import { useState } from "react";
@@ -12,7 +12,9 @@ interface BurnMessageProps {
 }
 
 export function BurnMessage({ objectId, sender, onBurnSuccess }: BurnMessageProps) {
+  const client = useIotaClient();
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
+  
   const [status, setStatus] = useState<"idle" | "burning" | "revealed">("idle");
   const [secretContent, setSecretContent] = useState<string | null>(null);
 
@@ -30,54 +32,90 @@ export function BurnMessage({ objectId, sender, onBurnSuccess }: BurnMessageProp
 
     signAndExecute(
       {
+        // 修正錯誤 2: Type 'Transaction' mismatch
+        // 使用 (tx as any) 繞過版本定義不一致的問題
         transaction: tx as any,
         options: {
           showEvents: true,
         },
       },
       {
-        onSuccess: (result) => {
-          // --- Debug 區塊 ---
-          console.log("交易完整結果:", result);
-          console.log("觸發的 Events:", (result as any).events);
+        onSuccess: async (result) => {
+          console.log("Wallet 初步回應:", result);
+          
+          // 修正錯誤 1: Property 'events' does not exist
+          // 強制轉型 (result as any) 來讀取 events
+          let events = (result as any).events;
+          const digest = result.digest;
 
-          // 1. 建構預期的 Event Type 字串 (Package::Module::EventName)
-          // 注意：請確認你的 Move 合約中的 Event Struct 真的是 "MessageBurned"
-          const expectedEventType = `${PACKAGE_ID}::${MODULE_NAME}::MessageBurned`;
+          // 若 Wallet 沒回傳 events，主動查詢
+          if (!events || events.length === 0) {
+            console.log("⚠️ Wallet 未回傳 Events，正在透過 Client 主動查詢...", digest);
+            try {
+              const txDetails = await client.waitForTransaction({
+                digest: digest,
+                options: {
+                  showEvents: true,
+                },
+              });
+              events = txDetails.events;
+              console.log("✅ 主動查詢成功，取得 Events:", events);
+            } catch (fetchError) {
+              console.error("❌ 主動查詢失敗:", fetchError);
+            }
+          }
 
-          // 2. 搜尋 Event (比對 type 是否包含預期字串)
-          const burnEvent = (result as any).events?.find((e: any) =>
-            e.type.includes(expectedEventType)
-          );
+          if (events && events.length > 0) {
+            // 修正錯誤 3: Parameter 'e' implicitly has an 'any' type
+            // 加上 (e: any)
+            const targetEvent = events.find((e: any) =>
+              e.type.startsWith(`${PACKAGE_ID}::${MODULE_NAME}`)
+            );
 
-          if (burnEvent && burnEvent.parsedJson) {
-            const content = (burnEvent.parsedJson as any).content;
-            setSecretContent(content);
-            setStatus("revealed");
-            onBurnSuccess();
+            if (targetEvent && targetEvent.parsedJson) {
+              console.log("🔥 鎖定目標 Event:", targetEvent.type);
+              
+              const content = (targetEvent.parsedJson as any).content;
+              
+              if (content) {
+                setSecretContent(content);
+                setStatus("revealed");
+                
+                // ⚠️ 關鍵修改：註解掉這行
+                // 不要呼叫 onBurnSuccess()，否則父元件會刷新列表導致此訊息消失
+                // onBurnSuccess(); 
+              } else {
+                console.error("Event 結構異常:", targetEvent.parsedJson);
+                alert(`⚠️ 找到 Event，但沒有 'content' 欄位。`);
+                setStatus("idle");
+              }
+            } else {
+              // 交易成功但沒找到特定 Event，通常這不應該發生，除非過濾條件錯了
+              // 我們不在這裡報錯，避免蓋掉成功狀態，但也許可以 console.warn
+              console.warn("未找到符合的 MessageBurned Event");
+            }
           } else {
-            // 如果進到這裡，請按 F12 看 Console 印出的 "觸發的 Events" 
-            // 檢查 e.type 跟我們組出的 expectedEventType 差在哪裡
-            console.error(`找不到符合 ${expectedEventType} 的 Event`);
-            alert("⚠️ 交易成功，但找不到 Event 內容。請查看 Console 確認 Event 名稱。");
+            console.error("❌ 最終仍未取得任何 Events");
+            alert("⚠️ 交易成功，但無法讀取銷毀後的訊息。");
             setStatus("idle");
           }
         },
         onError: (err) => {
-          console.error(err);
-          alert("❌ 銷毀失敗");
+          console.error("交易失敗:", err);
+          alert("❌ 銷毀失敗，請查看 Console");
           setStatus("idle");
         },
       }
     );
   };
 
+  // 顯示銷毀後的訊息狀態
   if (status === "revealed" && secretContent) {
     return (
       <div className="mt-2 p-4 bg-red-900/50 border border-red-500 rounded animate-pulse">
         <p className="text-xs text-red-300 mb-1">🔥 訊息已銷毀，內容如下：</p>
         <p className="text-xl font-bold text-white break-all">{secretContent}</p>
-        <p className="text-xs text-gray-400 mt-2">(重新整理頁面後將永遠消失)</p>
+        <p className="text-xs text-gray-400 mt-2">(重新整理頁面後此訊息將永遠消失)</p>
       </div>
     );
   }
